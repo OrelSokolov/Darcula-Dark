@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Darcula Dark Color Table</title>
+<style>
+    body{font-family:Arial,sans-serif;background:#1d1d1d;color:#f0f0f0;margin:0;padding:20px;}
+    h1{text-align:center;margin-bottom:20px;font-size:24px;}
+    table{border-collapse:collapse;width:100%;max-width:800px;margin:auto;background:#1d1d1d;font-size:13px;}
+    th,td{padding:6px 10px;border:1px solid #444;}
+    th{background:#2a2a2a;text-align:left;width:200px;font-weight:normal;}
+    td{background:#242424;}
+    .color-box{display:inline-block;width:20px;height:20px;vertical-align:middle;margin-right:8px;border:1px solid #555;border-radius:2px;cursor:pointer;}
+    .value{font-family:monospace;font-size:12px;color:#fff;cursor:pointer;user-select:all;}
+    .value:hover{color:#3694ff;}
+    .color-box:hover{border-color:#3694ff;}
+    .color-row{cursor:pointer;}
+    .color-row:hover td{background:#2a2a2a;}
+    .buttons{text-align:center;margin:20px 0;}
+    button{padding:8px 16px;margin:5px;background:#444;color:#f0f0f0;border:none;cursor:pointer;border-radius:4px;font-size:13px;}
+    button:hover{background:#555;}
+    #save{position:fixed;bottom:20px;right:20px;padding:12px 20px;background:#3694ff;z-index:1000;}
+    #save:hover{background:#4aa0ff;}
+    
+    /* Окошко с color picker */
+    #picker-window{
+        position:fixed;
+        top:0;
+        right:0;
+        background:#2a2a2a;
+        border:1px solid #444;
+        border-radius:0 0 0 8px;
+        padding:20px;
+        z-index:2000;
+        box-shadow:0 4px 20px rgba(0,0,0,0.5);
+        display:none;
+        min-width:280px;
+    }
+    #picker-window.active{display:block;}
+    #picker-window h3{
+        margin:0 0 15px 0;
+        font-size:14px;
+        font-weight:normal;
+        color:#fff;
+        font-family:monospace;
+        word-break:break-all;
+    }
+    #picker-close{
+        position:absolute;
+        top:10px;
+        right:10px;
+        background:transparent;
+        border:none;
+        color:#fff;
+        font-size:20px;
+        cursor:pointer;
+        width:24px;
+        height:24px;
+        line-height:24px;
+        text-align:center;
+        padding:0;
+    }
+    #picker-close:hover{background:#444;border-radius:3px;}
+    #picker-container{margin-top:10px;}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
+</head>
+<body>
+<h1>Darcula Dark Color Editor</h1>
+
+<table id="colors">
+    <thead>
+        <tr>
+            <th>Property</th>
+            <th>Color</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<div class="buttons">
+    <button id="save">Save to Server</button>
+    <button id="download">Download JSON</button>
+    <button id="refresh">Refresh Theme</button>
+</div>
+
+<!-- Окошко с color picker -->
+<div id="picker-window">
+    <button id="picker-close">×</button>
+    <h3 id="picker-property-name"></h3>
+    <div id="picker-container"></div>
+</div>
+
+<script>
+let currentPicker = null;
+let currentColorKey = null;
+let currentColorBox = null;
+let currentValueSpan = null;
+let originalColorFormat = null; // Сохраняем оригинальный формат (6 или 8 символов)
+
+// Рекурсивная функция для извлечения всех цветов из объекта
+function extractColors(obj, prefix = '', result = {}) {
+    for (const [key, value] of Object.entries(obj)) {
+        const fullKey = prefix ? `${prefix}.${key}` : key;
+        
+        if (typeof value === 'string' && /^#[0-9A-Fa-f]{6,8}$/.test(value)) {
+            result[fullKey] = value;
+        } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            extractColors(value, fullKey, result);
+        }
+    }
+    return result;
+}
+
+// Функция для определения, есть ли альфа-канал в цвете
+function hasAlpha(color) {
+    return color && color.length === 9; // #RRGGBBAA
+}
+
+// Функция для извлечения альфа-канала из цвета
+function getAlpha(color) {
+    if (hasAlpha(color)) {
+        const alphaHex = color.slice(7, 9);
+        return parseInt(alphaHex, 16) / 255;
+    }
+    return 1.0;
+}
+
+// Функция для конвертации вложенной структуры в плоскую
+function flattenObject(obj, prefix = '', result = {}) {
+    for (const [key, value] of Object.entries(obj)) {
+        const fullKey = prefix ? `${prefix}.${key}` : key;
+        
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            // Рекурсивно обрабатываем вложенные объекты
+            flattenObject(value, fullKey, result);
+        } else {
+            // Сохраняем значение напрямую (плоская структура)
+            result[fullKey] = value;
+        }
+    }
+    return result;
+}
+
+// Функция для установки значения цвета в плоской структуре
+function setColorValue(obj, path, value) {
+    // Всегда используем плоскую структуру - устанавливаем свойство напрямую
+    obj[path] = value;
+    
+    // Удаляем возможные вложенные объекты с таким же префиксом
+    const keys = path.split('.');
+    if (keys.length > 1) {
+        // Удаляем вложенные объекты, которые могли быть созданы ранее
+        // Например, если есть "border.focused", удаляем объект "border" если он существует
+        const firstKey = keys[0];
+        if (obj[firstKey] && typeof obj[firstKey] === 'object' && !Array.isArray(obj[firstKey])) {
+            // Если это вложенный объект, удаляем его, так как теперь используем плоскую структуру
+            delete obj[firstKey];
+        }
+    }
+}
+
+async function loadTheme() {
+    const res = await fetch(`darcula_dark.json?t=${Date.now()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+}
+
+function openColorPicker(key, colorValue, colorBox, valueSpan) {
+    const pickerWindow = document.getElementById('picker-window');
+    const pickerContainer = document.getElementById('picker-container');
+    const propertyName = document.getElementById('picker-property-name');
+    
+    // Уничтожаем предыдущий picker, если есть
+    if (currentPicker) {
+        currentPicker = null;
+    }
+    
+    // Очищаем контейнер
+    pickerContainer.innerHTML = '';
+    
+    // Сохраняем ссылки на текущие элементы
+    currentColorKey = key;
+    currentColorBox = colorBox;
+    currentValueSpan = valueSpan;
+    
+    // Определяем, есть ли альфа-канал в исходном цвете
+    const hasAlphaChannel = hasAlpha(colorValue);
+    originalColorFormat = hasAlphaChannel ? 8 : 6;
+    
+    // Извлекаем RGB часть (первые 7 символов: #RRGGBB)
+    const rgbColor = colorValue.slice(0, 7);
+    const alpha = getAlpha(colorValue);
+    
+    // Устанавливаем название свойства
+    propertyName.textContent = key;
+    
+    // Создаем layout с альфа-слайдером, если был альфа-канал
+    const layout = [
+        { component: iro.ui.Slider, options: {} },
+        { component: iro.ui.Wheel, options: {} }
+    ];
+    
+    if (hasAlphaChannel) {
+        layout.push({ component: iro.ui.Slider, options: { sliderType: 'alpha' } });
+    }
+    
+    // Создаем новый picker
+    currentPicker = new iro.ColorPicker(pickerContainer, {
+        color: rgbColor,
+        width: 240,
+        alpha: alpha,
+        layout: layout
+    });
+    
+    // Обработчик изменения цвета
+    currentPicker.on('input:end', c => {
+        let hex;
+        if (originalColorFormat === 8) {
+            // Сохраняем с альфа-каналом
+            const alphaHex = Math.round(c.alpha * 255).toString(16).padStart(2, '0');
+            hex = c.hexString + alphaHex;
+        } else {
+            // Без альфа-канала
+            hex = c.hexString;
+        }
+        
+        if (currentColorBox) {
+            // Для отображения используем rgba, чтобы показать прозрачность
+            if (originalColorFormat === 8) {
+                const r = parseInt(hex.slice(1, 3), 16);
+                const g = parseInt(hex.slice(3, 5), 16);
+                const b = parseInt(hex.slice(5, 7), 16);
+                const a = parseInt(hex.slice(7, 9), 16) / 255;
+                currentColorBox.style.background = `rgba(${r}, ${g}, ${b}, ${a})`;
+            } else {
+                currentColorBox.style.background = hex;
+            }
+        }
+        if (currentValueSpan) {
+            currentValueSpan.textContent = hex;
+        }
+        // Обновляем значение в исходном объекте темы
+        if (currentColorKey && window.currentTheme) {
+            setColorValue(window.currentTheme, currentColorKey, hex);
+        }
+    });
+    
+    // Также обновляем при движении (не только в конце)
+    currentPicker.on('input:change', c => {
+        let hex;
+        if (originalColorFormat === 8) {
+            const alphaHex = Math.round(c.alpha * 255).toString(16).padStart(2, '0');
+            hex = c.hexString + alphaHex;
+        } else {
+            hex = c.hexString;
+        }
+        
+        if (currentColorBox) {
+            if (originalColorFormat === 8) {
+                const r = parseInt(hex.slice(1, 3), 16);
+                const g = parseInt(hex.slice(3, 5), 16);
+                const b = parseInt(hex.slice(5, 7), 16);
+                const a = parseInt(hex.slice(7, 9), 16) / 255;
+                currentColorBox.style.background = `rgba(${r}, ${g}, ${b}, ${a})`;
+            } else {
+                currentColorBox.style.background = hex;
+            }
+        }
+        if (currentValueSpan) {
+            currentValueSpan.textContent = hex;
+        }
+        if (currentColorKey && window.currentTheme) {
+            setColorValue(window.currentTheme, currentColorKey, hex);
+        }
+    });
+    
+    // Показываем окошко
+    pickerWindow.classList.add('active');
+}
+
+function closeColorPicker() {
+    const pickerWindow = document.getElementById('picker-window');
+    pickerWindow.classList.remove('active');
+    if (currentPicker) {
+        currentPicker = null;
+    }
+    currentColorKey = null;
+    currentColorBox = null;
+    currentValueSpan = null;
+    originalColorFormat = null;
+}
+
+function renderTable(theme) {
+    const tbody = document.querySelector('#colors tbody');
+    tbody.innerHTML = '';
+    
+    // Извлекаем все цвета из темы
+    const colorMap = extractColors(theme);
+    
+    // Сортируем ключи для лучшей организации
+    const sortedKeys = Object.keys(colorMap).sort();
+    
+    sortedKeys.forEach((key) => {
+        const colorValue = colorMap[key];
+        const tr = document.createElement('tr');
+        tr.className = 'color-row';
+
+        const th = document.createElement('th');
+        th.textContent = key;
+        th.style.fontFamily = 'monospace';
+        th.style.fontSize = '11px';
+
+        const td = document.createElement('td');
+
+        const box = document.createElement('span');
+        box.className = 'color-box';
+        // Правильно отображаем цвет с альфа-каналом
+        if (hasAlpha(colorValue)) {
+            const r = parseInt(colorValue.slice(1, 3), 16);
+            const g = parseInt(colorValue.slice(3, 5), 16);
+            const b = parseInt(colorValue.slice(5, 7), 16);
+            const a = parseInt(colorValue.slice(7, 9), 16) / 255;
+            box.style.background = `rgba(${r}, ${g}, ${b}, ${a})`;
+        } else {
+            box.style.background = colorValue;
+        }
+
+        const valueSpan = document.createElement('span');
+        valueSpan.textContent = colorValue;
+        valueSpan.className = 'value';
+
+        // Обработчик клика на строку, цвет или значение
+        const openPicker = () => openColorPicker(key, colorValue, box, valueSpan);
+        tr.addEventListener('click', openPicker);
+        box.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openPicker();
+        });
+        valueSpan.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openPicker();
+        });
+
+        td.append(box, valueSpan);
+        tr.append(th, td);
+        tbody.append(tr);
+    });
+}
+
+function downloadJSON(theme) {
+    // Убеждаемся, что тема в плоской структуре
+    const flatTheme = flattenObject(theme);
+    
+    const data = {
+        $schema: "https://zed.dev/schema/themes/v0.2.0.json",
+        name: "Darcula Dark",
+        author: "Andrew Gielow <awgielow@gmail.com>",
+        themes: [
+            { name: "Darcula Dark", appearance: "dark", style: flatTheme }
+        ]
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = "darcula_dark.json";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+        URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    }, 1000);
+}
+
+async function saveTheme() {
+    try {
+        // Убеждаемся, что тема в плоской структуре перед сохранением
+        const flatTheme = flattenObject(window.currentTheme);
+        
+        const res = await fetch('/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                $schema: "https://zed.dev/schema/themes/v0.2.0.json",
+                name: "Darcula Dark",
+                author: "Andrew Gielow <awgielow@gmail.com>",
+                themes: [
+                    { name: "Darcula Dark", appearance: "dark", style: flatTheme }
+                ]
+            })
+        });
+        if (res.ok) {
+            const result = await res.json();
+            alert('Тема успешно сохранена!');
+            // Перезагружаем после сохранения
+            await init();
+        } else {
+            const error = await res.text();
+            alert('Ошибка сохранения: ' + error);
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+async function init() {
+    try {
+        const json = await loadTheme();
+        const originalStyle = JSON.parse(JSON.stringify(json.themes[0].style)); // Глубокая копия
+        
+        // Конвертируем вложенную структуру в плоскую
+        window.currentTheme = flattenObject(originalStyle);
+        
+        renderTable(window.currentTheme);
+        closeColorPicker(); // Закрываем picker при перезагрузке
+    } catch (e) {
+        alert('Ошибка загрузки темы: ' + e.message);
+        console.error(e);
+    }
+}
+
+// Инициализация после загрузки DOM
+document.addEventListener('DOMContentLoaded', () => {
+    init();
+    
+    document.getElementById('save').addEventListener('click', saveTheme);
+    document.getElementById('download').addEventListener('click', () => downloadJSON(window.currentTheme));
+    document.getElementById('refresh').addEventListener('click', init);
+    document.getElementById('picker-close').addEventListener('click', closeColorPicker);
+    
+    // Закрываем picker при клике вне его
+    document.addEventListener('click', (e) => {
+        const pickerWindow = document.getElementById('picker-window');
+        if (pickerWindow.classList.contains('active') && !pickerWindow.contains(e.target) && !e.target.closest('.color-row') && !e.target.closest('.color-box') && !e.target.closest('.value')) {
+            closeColorPicker();
+        }
+    });
+});
+</script>
+</body>
+</html>

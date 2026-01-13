@@ -1,0 +1,18 @@
+{
+  "name": "darcula-dark",
+  "version": "1.0.0",
+  "description": "<p align=\"center\">     <h1 align=\"center\">Darcula Dark for <a href=\"https://zed.dev/\">Zed Editor</a></h1>     <p align=\"center\"> \tA darker theme for <a href=\"https://zed.dev/\">Zed</a> based on the <strong>Darcula</strong> theme from <a href=\"https://www.jetbrains.com\">Jetbrains</a> IDEs.       <br><br>       Too dark? Check out <a href=\"https://github.com/e-simpson/new-darcula-z/\">New Darcula</a> by <a href=\"https://github.com/e-simpson/\">Evan Simpson</a> for a similar (but lighter and more Jetbrains-accurate) theme     </p> </p>",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "exrpess": "^0.0.1-security"
+  }
+}
